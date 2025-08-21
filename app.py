@@ -266,6 +266,28 @@ if tmpl_type == "PortfolioMaster":
                 wide = esg.pivot_table(index=None, columns="Metric", values="Value", aggfunc="first")
                 st.dataframe(wide)
 
+                # PATCH B: build 'wide' with expected keys to avoid KeyErrors
+                    # PATCH B: build 'wide' with expected keys to avoid KeyErrors
+                pm_df = dfs["PortfolioMaster"]
+                
+                def _avg(series):
+                    s = pd.to_numeric(series, errors="coerce").replace(0, np.nan)
+                    return float(s.mean()) if s.notna().any() else np.nan
+                
+                _port_esg     = _avg(pm_df.get("ESG Score"))
+                _port_carbon  = _avg(pm_df.get("Carbon Intensity"))
+                _bench_esg    = float(policy_meta_df["Benchmark ESG"].iloc[0]) if "Benchmark ESG" in policy_meta_df.columns and not policy_meta_df.empty else np.nan
+                _bench_carbon = float(policy_meta_df["Benchmark Carbon"].iloc[0]) if "Benchmark Carbon" in policy_meta_df.columns and not policy_meta_df.empty else np.nan
+                
+                wide = pd.DataFrame([{
+                    "Portfolio ESG": _port_esg,
+                    "Benchmark ESG": _bench_esg,
+                    "Portfolio Carbon": _port_carbon,
+                    "Benchmark Carbon": _bench_carbon,
+                }])
+
+
+
                 esg_plot = pd.DataFrame({
                     "Metric": ["ESG","ESG"],
                     "Type": ["Portfolio","Benchmark"],
@@ -388,5 +410,6 @@ st.download_button(
     "Download PDF report", pdf_bytes,
     file_name="portfolio_health_report.pdf", mime="application/pdf"
 )
+
 
 
