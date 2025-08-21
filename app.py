@@ -1,120 +1,155 @@
 # app.py
-import io
 import numpy as np
 import pandas as pd
 import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 
-# ---------------- internal modules ----------------
-from processing.pipeline import read_workbook  # uses your existing loader
-
-# Optional exports (guarded)
+# ---------------- optional: use your pipeline if available ----------------
 try:
-    from processing.reporting import build_excel_report  # should return bytes
+    from processing.pipeline import read_workbook as _read_workbook
+except Exception:
+    _read_workbook = None
+
+# ---------------- optional exports (guarded) ----------------
+try:
+    from processing.reporting import build_excel_report  # must return bytes
 except Exception:
     build_excel_report = None
+
 try:
-    from processing.pdf_report import build_pdf_report  # should return bytes
+    from processing.pdf_report import build_pdf_report  # must return bytes
 except Exception:
     build_pdf_report = None
 
-# Try import chart helpers from plot.py; if missing, define fallbacks here
-try:
-    from plot import donut as plot_donut, bar as plot_bar, hbar as plot_hbar, waterfall as plot_waterfall, choropleth_iso3 as plot_choro
-    HAVE_PLOT_HELPERS = True
-except Exception:
-    HAVE_PLOT_HELPERS = False
-
-    _DEFAULT_HEIGHT = 420
-    _DEFAULT_MARGINS = dict(l=60, r=40, t=84, b=60)
-    _DEFAULT_TITLE = dict(y=0.97, x=0.5, xanchor="center", yanchor="top", font=dict(size=18))
-    _DEFAULT_LEGEND = dict(orientation="h", yanchor="bottom", y=-0.2, x=0.5, xanchor="center")
-    _DEFAULT_FONT = dict(size=13)
-    _UNIFORMTEXT = dict(mode="hide", minsize=10)
-
-    def _base_layout(fig: go.Figure, title: str | None = None, height: int | None = None) -> go.Figure:
-        fig.update_layout(
-            height=height or _DEFAULT_HEIGHT,
-            margin=_DEFAULT_MARGINS,
-            title=(dict(text=title, **_DEFAULT_TITLE) if title else None),
-            legend=_DEFAULT_LEGEND,
-            font=_DEFAULT_FONT,
-            hovermode="closest",
-            bargap=0.2,
-            bargroupgap=0.08,
-            uniformtext=_UNIFORMTEXT,
-        )
-        fig.update_xaxes(automargin=True)
-        fig.update_yaxes(automargin=True)
-        return fig
-
-    def plot_donut(df: pd.DataFrame, cat_col: str, val_col: str, title: str | None = None, hole: float = 0.55) -> go.Figure:
-        d = df.groupby(cat_col, dropna=False, as_index=False)[val_col].sum()
-        d[val_col] = pd.to_numeric(d[val_col], errors="coerce").fillna(0)
-        fig = px.pie(d, names=cat_col, values=val_col, hole=hole)
-        fig.update_traces(textposition="inside", textinfo="percent+label", insidetextorientation="radial")
-        return _base_layout(fig, title)
-
-    def plot_bar(df: pd.DataFrame, x: str, y: str, title: str | None = None, sort_desc: bool = True, top_n: int | None = None) -> go.Figure:
-        d = df.copy()
-        if top_n is not None:
-            d = d.sort_values(y, ascending=False).head(top_n)
-        d = d.sort_values(y, ascending=not sort_desc)
-        fig = px.bar(d, x=x, y=y)
-        fig.update_traces(hovertemplate=f"{x}: %{{x}}<br>{y}: %{{y:,.2f}}<extra></extra>")
-        return _base_layout(fig, title)
-
-    def plot_hbar(df: pd.DataFrame, y: str, x: str, title: str | None = None, sort_desc: bool = True, top_n: int | None = None) -> go.Figure:
-        d = df.copy()
-        if top_n is not None:
-            d = d.sort_values(x, ascending=False).head(top_n)
-        d = d.sort_values(x, ascending=not sort_desc)
-        fig = px.bar(d, y=y, x=x, orientation="h")
-        fig.update_traces(hovertemplate=f"{y}: %{{y}}<br>{x}: %{{x:,.2f}}<extra></extra>")
-        return _base_layout(fig, title)
-
-    def plot_waterfall(df: pd.DataFrame, label_col: str, value_col: str, title: str | None = None) -> go.Figure:
-        d = df.copy()
-        d[value_col] = pd.to_numeric(d[value_col], errors="coerce").fillna(0)
-        measures = ["relative"] * max(len(d) - 1, 0) + ["total"]
-        fig = go.Figure(go.Waterfall(
-            x=d[label_col].astype(str),
-            y=d[value_col],
-            measure=measures,
-            connector={"line": {"width": 1}},
-        ))
-        fig.update_traces(hovertemplate=f"{label_col}: %{{x}}<br>{value_col}: %{{y:,.2f}}<extra></extra>")
-        return _base_layout(fig, title)
-
-    def plot_choro(df: pd.DataFrame, iso3_col: str, value_col: str, title: str | None = None) -> go.Figure:
-        d = df.copy()
-        d[value_col] = pd.to_numeric(d[value_col], errors="coerce").fillna(0)
-        d = d.groupby(iso3_col, as_index=False)[value_col].sum()
-        fig = px.choropleth(d, locations=iso3_col, color=value_col, color_continuous_scale="Blues", projection="natural earth")
-        fig.update_coloraxes(colorbar_title=value_col)
-        return _base_layout(fig, title, height=500)
-
-# ---------------- app config ----------------
 st.set_page_config(page_title="Portfolio Health Check", layout="wide")
 st.title("Portfolio Health Check")
 
-# ---------------- helpers ----------------
-REQ_PM_COLS = ["Asset Class", "Sub Asset Class", "FX", "USD Total"]
+# ---------------- plotting helpers (local, no dependency on plot.py) ----------------
+_DEFAULT_HEIGHT = 420
+_DEFAULT_MARGINS = dict(l=60, r=40, t=84, b=60)
+_DEFAULT_TITLE = dict(y=0.97, x=0.5, xanchor="center", yanchor="top", font=dict(size=18))
+_DEFAULT_LEGEND = dict(orientation="h", yanchor="bottom", y=-0.2, x=0.5, xanchor="center")
+_DEFAULT_FONT = dict(size=13)
+_UNIFORMTEXT = dict(mode="hide", minsize=10)
 
-def _get_sheet(dfs: dict, name: str) -> pd.DataFrame:
-    if not dfs:
-        return pd.DataFrame()
-    for k in dfs.keys():
-        if k.lower() == name.lower():
-            return dfs[k]
-    return pd.DataFrame()
+def _base_layout(fig: go.Figure, title: str | None = None, height: int | None = None) -> go.Figure:
+    fig.update_layout(
+        height=height or _DEFAULT_HEIGHT,
+        margin=_DEFAULT_MARGINS,
+        title=(dict(text=title, **_DEFAULT_TITLE) if title else None),
+        legend=_DEFAULT_LEGEND,
+        font=_DEFAULT_FONT,
+        hovermode="closest",
+        bargap=0.2,
+        bargroupgap=0.08,
+        uniformtext=_UNIFORMTEXT,
+    )
+    fig.update_xaxes(automargin=True)
+    fig.update_yaxes(automargin=True)
+    return fig
+
+def plot_donut(df: pd.DataFrame, cat_col: str, val_col: str, title: str | None = None, hole: float = 0.55) -> go.Figure:
+    d = df.groupby(cat_col, dropna=False, as_index=False)[val_col].sum()
+    d[val_col] = pd.to_numeric(d[val_col], errors="coerce").fillna(0)
+    fig = px.pie(d, names=cat_col, values=val_col, hole=hole)
+    fig.update_traces(textposition="inside", textinfo="percent+label", insidetextorientation="radial")
+    return _base_layout(fig, title)
+
+def plot_bar(df: pd.DataFrame, x: str, y: str, title: str | None = None, sort_desc: bool = True, top_n: int | None = None) -> go.Figure:
+    d = df.copy()
+    if top_n is not None:
+        d = d.sort_values(y, ascending=False).head(top_n)
+    d = d.sort_values(y, ascending=not sort_desc)
+    fig = px.bar(d, x=x, y=y)
+    fig.update_traces(hovertemplate=f"{x}: %{{x}}<br>{y}: %{{y:,.2f}}<extra></extra>")
+    return _base_layout(fig, title)
+
+def plot_hbar(df: pd.DataFrame, y: str, x: str, title: str | None = None, sort_desc: bool = True, top_n: int | None = None) -> go.Figure:
+    d = df.copy()
+    if top_n is not None:
+        d = d.sort_values(x, ascending=False).head(top_n)
+    d = d.sort_values(x, ascending=not sort_desc)
+    fig = px.bar(d, y=y, x=x, orientation="h")
+    fig.update_traces(hovertemplate=f"{y}: %{{y}}<br>{x}: %{{x:,.2f}}<extra></extra>")
+    return _base_layout(fig, title)
+
+def plot_waterfall(df: pd.DataFrame, label_col: str, value_col: str, title: str | None = None) -> go.Figure:
+    d = df.copy()
+    d[value_col] = pd.to_numeric(d[value_col], errors="coerce").fillna(0)
+    measures = ["relative"] * max(len(d) - 1, 0) + ["total"]
+    fig = go.Figure(go.Waterfall(
+        x=d[label_col].astype(str),
+        y=d[value_col],
+        measure=measures,
+        connector={"line": {"width": 1}},
+    ))
+    fig.update_traces(hovertemplate=f"{label_col}: %{{x}}<br>{value_col}: %{{y:,.2f}}<extra></extra>")
+    return _base_layout(fig, title)
+
+def plot_choro(df: pd.DataFrame, iso3_col: str, value_col: str, title: str | None = None) -> go.Figure:
+    d = df.copy()
+    d[value_col] = pd.to_numeric(d[value_col], errors="coerce").fillna(0)
+    d = d.groupby(iso3_col, as_index=False)[value_col].sum()
+    fig = px.choropleth(d, locations=iso3_col, color=value_col, color_continuous_scale="Blues", projection="natural earth")
+    fig.update_coloraxes(colorbar_title=value_col)
+    return _base_layout(fig, title, height=500)
+
+# ---------------- utils ----------------
+REQ_PM_COLS = ["Asset Class", "Sub Asset Class", "FX", "USD Total"]
 
 def _avg(series):
     s = pd.to_numeric(series, errors="coerce").replace(0, np.nan)
     return float(s.mean()) if s.notna().any() else np.nan
 
-# ---------------- sidebar upload ----------------
+def _ci_get(dct: dict, name: str):
+    """Case-insensitive dictionary get for sheet names."""
+    for k, v in dct.items():
+        if k.lower() == name.lower():
+            return v
+    return pd.DataFrame()
+
+def _load_sheets(uploaded_file) -> dict:
+    """
+    Robust reader:
+    - try processing.pipeline.read_workbook if available
+    - accept dict OR tuple/list containing a dict
+    - else fall back to pandas ExcelFile(all sheets)
+    Returns: dict[str, DataFrame]
+    """
+    sheets = None
+    if _read_workbook is not None:
+        try:
+            out = _read_workbook(uploaded_file)
+        except Exception:
+            out = None
+        # normalize to dict
+        if isinstance(out, dict):
+            sheets = out
+        elif isinstance(out, (list, tuple)):
+            for item in out:
+                if isinstance(item, dict) and any(isinstance(v, pd.DataFrame) for v in item.values()):
+                    sheets = item
+                    break
+        # some pipelines return an object with .sheets or similar
+        if sheets is None and hasattr(out, "sheets") and isinstance(out.sheets, dict):
+            sheets = out.sheets
+
+    if sheets is None:
+        # fallback: read all sheets directly
+        xls = pd.ExcelFile(uploaded_file)
+        sheets = {name: xls.parse(name) for name in xls.sheet_names}
+
+    # ensure DataFrames
+    for k, v in list(sheets.items()):
+        if not isinstance(v, pd.DataFrame):
+            try:
+                sheets[k] = pd.DataFrame(v)
+            except Exception:
+                sheets[k] = pd.DataFrame()
+    return sheets
+
+# ---------------- sidebar ----------------
 with st.sidebar:
     st.markdown("#### Upload Portfolio Workbook")
     uploaded_file = st.file_uploader(
@@ -127,17 +162,16 @@ if not uploaded_file:
     st.info("Upload an Excel file to begin.")
     st.stop()
 
-# read workbook -> dict of DataFrames keyed by sheet
-dfs = read_workbook(uploaded_file)
+# ---------------- read workbook (robust) ----------------
+sheets = _load_sheets(uploaded_file)
 
-# Sheets
-pm_df  = _get_sheet(dfs, "PortfolioMaster")
-eq_df  = _get_sheet(dfs, "EquityAssetList")
-fi_df  = _get_sheet(dfs, "FixedIncomeAssetList")
-policy = _get_sheet(dfs, "Policy")
+pm_df  = _ci_get(sheets, "PortfolioMaster")
+eq_df  = _ci_get(sheets, "EquityAssetList")
+fi_df  = _ci_get(sheets, "FixedIncomeAssetList")
+policy = _ci_get(sheets, "Policy")
 
-# --- ESG/Carbon: normalize PolicyMeta headers to expected labels
-policy_meta_df = _get_sheet(dfs, "PolicyMeta")
+# ---- normalize PolicyMeta -> expected keys ----
+policy_meta_df = _ci_get(sheets, "PolicyMeta")
 if not policy_meta_df.empty:
     policy_meta_df = policy_meta_df.rename(columns={
         "ESG_Benchmark_Score": "Benchmark ESG",
@@ -146,24 +180,24 @@ if not policy_meta_df.empty:
 else:
     policy_meta_df = pd.DataFrame(columns=["Benchmark ESG", "Benchmark Carbon"])
 
-# Validate PM required columns
+# ---- validate required PM columns ----
 missing = [c for c in REQ_PM_COLS if c not in pm_df.columns]
 if missing:
     st.error(f"Missing required columns in PortfolioMaster: {missing}")
     st.stop()
 
-# Derive weights if not present
+# ---- derive weights if missing ----
 if "Weight %" not in pm_df.columns:
     total = pd.to_numeric(pm_df["USD Total"], errors="coerce").fillna(0).sum()
     pm_df["Weight %"] = (pd.to_numeric(pm_df["USD Total"], errors="coerce").fillna(0) / total * 100.0) if total > 0 else 0.0
 
-# Portfolio-level ESG/Carbon
+# ---- ESG/Carbon portfolio + benchmark ----
 portfolio_esg    = _avg(pm_df.get("ESG Score"))
 portfolio_carbon = _avg(pm_df.get("Carbon Intensity"))
 benchmark_esg    = float(policy_meta_df["Benchmark ESG"].iloc[0]) if "Benchmark ESG" in policy_meta_df.columns and not policy_meta_df.empty else np.nan
 benchmark_carbon = float(policy_meta_df["Benchmark Carbon"].iloc[0]) if "Benchmark Carbon" in policy_meta_df.columns and not policy_meta_df.empty else np.nan
 
-# Build 'wide' to satisfy existing downstream code that expects literal keys
+# ---- build 'wide' to satisfy any code that expects exact keys ----
 wide = pd.DataFrame([{
     "Portfolio ESG": portfolio_esg,
     "Benchmark ESG": benchmark_esg,
@@ -227,10 +261,7 @@ with tabs[2]:
         comp = policy.merge(actual[["Asset Class","Actual %"]], on="Asset Class", how="left").fillna(0)
         melt = comp.rename(columns={"Policy Weight %": "Policy %"}).melt("Asset Class", var_name="Type", value_name="Weight")
         fig = px.bar(melt, x="Asset Class", y="Weight", color="Type", barmode="group")
-        if HAVE_PLOT_HELPERS:
-            from plot import _base_layout
-            fig = _base_layout(fig, "Policy vs Actual (Weight %)")
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        st.plotly_chart(_base_layout(fig, "Policy vs Actual (Weight %)"), use_container_width=True, config={"displayModeBar": False})
 
         tol = st.slider("Breach tolerance (pp)", 0.0, 10.0, 2.0, 0.5)
         comp["Deviation (pp)"] = comp["Actual %"] - comp["Policy Weight %"]
@@ -277,6 +308,7 @@ with tabs[4]:
             st.info("Provide 'TER %', 'ESG Score', 'Carbon Intensity' to populate.")
 
     st.divider()
+    # Small tiles using 'wide' (keys always exist now)
     esg_plot = pd.DataFrame({
         "Metric": ["ESG","ESG"],
         "Type": ["Portfolio","Benchmark"],
@@ -342,7 +374,7 @@ with c1:
     if build_excel_report:
         if st.button("📊 Build Excel Report", use_container_width=True):
             try:
-                xbytes = build_excel_report(dfs=dfs)
+                xbytes = build_excel_report(dfs=sheets)  # expects dict of sheets
                 st.download_button("Download Excel", data=xbytes,
                                    file_name="Portfolio_Health_Check.xlsx",
                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -356,7 +388,7 @@ with c2:
     if build_pdf_report:
         if st.button("📄 Build PDF Report", use_container_width=True):
             try:
-                pbytes = build_pdf_report(dfs=dfs)
+                pbytes = build_pdf_report(dfs=sheets)  # expects dict of sheets
                 st.download_button("Download PDF", data=pbytes,
                                    file_name="Portfolio_Health_Check.pdf",
                                    mime="application/pdf",
