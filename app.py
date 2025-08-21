@@ -71,6 +71,20 @@ with st.sidebar:
         "Template type", options=tmpl_options, index=tmpl_options.index(detected_type)
     )
 
+# --- Normalise PolicyMeta column names (maps template -> app expectations) ---
+import pandas as pd
+import numpy as np
+
+policy_meta_df = dfs.get("PolicyMeta", pd.DataFrame())
+if not policy_meta_df.empty:
+    policy_meta_df = policy_meta_df.rename(columns={
+        "ESG_Benchmark_Score": "Benchmark ESG",
+        "Carbon_Benchmark_Intensity": "Benchmark Carbon",
+    })
+else:
+    # keep an empty frame with expected columns to avoid KeyError
+    policy_meta_df = pd.DataFrame(columns=["Benchmark ESG", "Benchmark Carbon"])
+
 # ---------------- Safe sheet fetch ----------------
 sheet_name = get_required_sheet_for_type(tmpl_type)
 df = sheets.get(sheet_name)
@@ -374,4 +388,5 @@ st.download_button(
     "Download PDF report", pdf_bytes,
     file_name="portfolio_health_report.pdf", mime="application/pdf"
 )
+
 
