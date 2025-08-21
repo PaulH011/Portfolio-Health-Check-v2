@@ -6,16 +6,20 @@ import plotly.io as pio
 
 # --- Internal modules ---
 from processing.pipeline import read_workbook, detect_template_type, validate_df, transform_results
-from processing.reporting import generate_excel_report
-from processing.pdf_report import generate_pdf_report
 from plot import donut, bar, hbar, waterfall, choropleth_iso3
 
-# Optional exports (guarded; buttons hidden if missing)
+# Optional exports (guarded; naming differences handled)
 try:
     from processing.reporting import generate_excel_report
+except ImportError:
+    try:
+        from processing.reporting import create_excel_report as generate_excel_report
+    except ImportError:
+        generate_excel_report = None
+
+try:
     from processing.pdf_report import generate_pdf_report
 except ImportError:
-    generate_excel_report = None
     generate_pdf_report = None
 
 # ================== PAGE CONFIG ==================
@@ -33,7 +37,6 @@ if uploaded_file:
     else:
         dfs = result
 
-    # Validate structure
     if not isinstance(dfs, dict):
         st.error("Uploaded file could not be read into expected format.")
     else:
@@ -56,9 +59,8 @@ if uploaded_file:
             st.subheader("PM – Summary")
             st.dataframe(pm_df.head())
 
-            # Example: Asset Class donut
+            # Asset Class donut
             fig = donut(pm_df, cat_col="Asset Class", val_col="USD Total")
-            # --- FIX: prevent legend overlap ---
             fig.update_layout(legend=dict(orientation="h", y=-0.2))
             st.plotly_chart(fig, use_container_width=True)
 
